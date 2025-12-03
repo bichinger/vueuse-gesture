@@ -14,6 +14,7 @@ import {
   getTouchIds,
   supportsGestureEvents,
   supportsTouchEvents,
+  supportsPointerEvents,
 } from './utils/event'
 import { getInitialState } from './utils/state'
 import { chainFns } from './utils/utils'
@@ -35,6 +36,7 @@ export default class Controller {
   public touchIds = new Set<number>() // register Touch Events identifiers
   public supportsTouchEvents = supportsTouchEvents()
   public supportsGestureEvents = supportsGestureEvents()
+  public supportsPointerEvents = supportsPointerEvents()
 
   constructor(private classes: Set<RecognizerClass>) {
     this.classes = classes

@@ -14,6 +14,17 @@ export function supportsGestureEvents(): boolean {
   }
 }
 
+/**
+ * Whether the browser supports PointerEvent
+ * @returns true if the browser supports pointer event
+ */
+export function supportsPointerEvents(): boolean {
+  try {
+    return typeof window !== 'undefined' && 'PointerEvent' in window
+  } catch (e) {
+    return false
+  }
+}
 export function supportsTouchEvents(): boolean {
   return typeof window !== 'undefined' && 'ontouchstart' in window
 }

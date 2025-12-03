@@ -255,6 +255,17 @@ export class PinchRecognizer extends DistanceAngleRecognizer<'pinch'> {
   }
 
   addBindings(bindings: any): void {
+    // [Patch] If pointer events are supported, bind pointer handlers
+    if (this.controller.supportsPointerEvents) {
+      addBindings(bindings, 'onPointerDown', this.onPointerDown)
+      addBindings(bindings, 'onPointerMove', this.onPointerMove)
+      addBindings(bindings, 'onPointerUp', this.onPointerUp)
+      addBindings(bindings, 'onPointerCancel', this.onPointerCancel)
+      addBindings(bindings, 'onWheel', this.onWheel)
+
+      return
+    }
+
     // Only try to use gesture events when they are supported and domTarget is set
     // as React doesn't support gesture handlers.
     if (
@@ -271,6 +282,187 @@ export class PinchRecognizer extends DistanceAngleRecognizer<'pinch'> {
       addBindings(bindings, 'onTouchEnd', this.onPinchEnd)
       addBindings(bindings, 'onTouchCancel', this.onPinchEnd)
       addBindings(bindings, 'onWheel', this.onWheel)
+    }
+  }
+
+  /*
+   * PATCH for supports pointer events
+   */
+  // All currently active pointers
+  private activePointers = new Map<number, PointerEvent>()
+
+  // The two pointers that actually drive this pinch gesture
+  private gesturePointerIds: [number, number] | null = null
+
+  // Helper: get values for exactly two pointer IDs
+  private getPointerValues(pointerIds: [number, number]) {
+    const [id1, id2] = pointerIds
+
+    const p1 = this.activePointers.get(id1)
+    const p2 = this.activePointers.get(id2)
+
+    // If one of the pointers disappeared: no valid values
+    if (!p1 || !p2) return null
+
+    const dx = p2.clientX - p1.clientX
+    const dy = p2.clientY - p1.clientY
+    const distance = Math.hypot(dx, dy)
+    const angle = Math.atan2(dy, dx)
+
+    const values: Vector2 = [distance, angle]
+    const origin: Vector2 = [
+      (p1.clientX + p2.clientX) / 2,
+      (p1.clientY + p2.clientY) / 2,
+    ]
+
+    return { values, origin }
+  }
+
+  // Pointer-based start
+  onPointerDown = (event: PointerEvent): void => {
+    if (!this.enabled) return
+
+    // Only include touch/pen pointers in a pinch (exclude mouse)
+    if (event.pointerType === 'mouse') return
+
+    this.activePointers.set(event.pointerId, event)
+
+    // No pointer capture – it can make the behavior feel sticky
+    // (event.target as Element | null)?.setPointerCapture?.(event.pointerId)
+
+    // If a gesture is already active, don't start a new one
+    if (this.state._active && this.gesturePointerIds) {
+      return
+    }
+
+    // Start only from two active pointers
+    if (this.activePointers.size < 2) return
+
+    // Take the first two pointers in insertion order (stable for pinch)
+    const pointerIds = Array.from(this.activePointers.keys()).slice(0, 2) as [
+      number,
+      number,
+    ]
+
+    const data = this.getPointerValues(pointerIds)
+    if (!data) return
+
+    const { values, origin } = data
+
+    this.gesturePointerIds = pointerIds
+
+    this.updateSharedState(getGenericEventData(event))
+
+    this.updateGestureState({
+      ...getStartGestureState(this, values, event),
+      ...getGenericPayload(this, event, true),
+      _pointerIds: pointerIds, // consistent with touch version
+      cancel: this.onCancel,
+      origin,
+    })
+
+    this.updateGestureState(this.getMovement(values))
+    this.fireGestureHandler()
+  }
+
+  // Pointer-based change
+  onPointerMove = (event: PointerEvent): void => {
+    const { canceled, _active } = this.state
+    if (canceled || !_active) return
+
+    if (!this.gesturePointerIds?.includes(event.pointerId)) {
+      if (this.activePointers.has(event.pointerId)) {
+        this.activePointers.set(event.pointerId, event)
+      }
+      return
+    }
+
+    this.activePointers.set(event.pointerId, event)
+
+    const data = this.getPointerValues(this.gesturePointerIds)
+    if (!data) return
+
+    const { values, origin } = data
+
+    this.updateSharedState(getGenericEventData(event))
+
+    const kinematics = this.getKinematicsForPointer(values, event)
+
+    this.updateGestureState({
+      ...getGenericPayload(this, event as any),
+      ...kinematics,
+      origin,
+    })
+
+    this.fireGestureHandler()
+  }
+
+  // Pointer end
+  onPointerUp = (event: PointerEvent): void => {
+    if (!this.activePointers.has(event.pointerId)) return
+
+    this.activePointers.delete(event.pointerId)
+
+    // If no active gesture → nothing to do
+    if (!this.state._active) {
+      if (this.activePointers.size === 0) {
+        this.gesturePointerIds = null
+      }
+      return
+    }
+
+    // If one of the two pinch pointers goes up, end the gesture
+    if (this.gesturePointerIds?.includes(event.pointerId)) {
+      this.clean()
+
+      this.updateGestureState({
+        ...getGenericPayload(this, event),
+        ...this.getMovement(this.state.values),
+        _active: false,
+      })
+
+      this.gesturePointerIds = null
+      this.fireGestureHandler()
+    }
+  }
+
+  // Pointer cancel
+  onPointerCancel = (event: PointerEvent): void => {
+    if (this.activePointers.has(event.pointerId)) {
+      this.activePointers.delete(event.pointerId)
+    }
+
+    this.gesturePointerIds = null
+    this.clean()
+    this.onCancel()
+  }
+
+  private getKinematicsForPointer(values: Vector2, event: PointerEvent) {
+    const state = this.getMovement(values)
+
+    const now = event.timeStamp
+    const prev = this.state.timeStamp ?? now
+    const dt = Math.max(now - prev, 1)
+
+    const { delta } = state
+
+    // Velocity from delta
+    const dl = Math.hypot(delta[0], delta[1])
+    const vl = dl / dt
+
+    // Smoothing: blend previous velocity in (exponential moving average)
+    const prevVelocity = this.state.velocity ?? 0
+    const smoothingFactor = 0.3 // 0 = no smoothing, 1 = maximum smoothing
+    const smoothedVelocity = prevVelocity * smoothingFactor + vl * (1 - smoothingFactor)
+
+    const velocities: Vector2 = [delta[0] / dt, delta[1] / dt]
+    const angle = dl > 0 ? Math.atan2(delta[1], delta[0]) : (this.state.vdva?.[1] ?? 0)
+
+    return {
+      ...state,
+      velocity: smoothedVelocity,
+      velocities,
+      vdva: [smoothedVelocity, angle] as Vector2,
     }
   }
 }

@@ -29,7 +29,7 @@
     }
   },
   "scripts": {
-    "prepare": "pnpm build",
+    "postinstall": "cd node_modules/@vueuse/gesture && pnpm install && pnpm build || true",
     "build": "unbuild",
     "dev": "jiti scripts/watch.ts --cache",
     "lint": "prettier -c --parser typescript \"{src,__tests__,e2e}/**/*.[jt]s?(x)\"",

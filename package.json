@@ -29,6 +29,7 @@
     }
   },
   "scripts": {
+    "prepare": "",
     "build": "unbuild",
     "dev": "jiti scripts/watch.ts --cache",
     "lint": "prettier -c --parser typescript \"{src,__tests__,e2e}/**/*.[jt]s?(x)\"",
